@@ -90,6 +90,11 @@ func resourceUserCreate(d *schema.ResourceData, m interface{}) error {
 	if err != nil {
 		return fmt.Errorf("failed to create user `%s` from Airflow: %w", email, err)
 	}
+
+	// Set e-mail as resource Id. It is unique just like the user username.
+	// However, in some cases like on GCP Cloud Composer, the username may
+	// be changed by an external auth layer. This will conflict with the
+	// Terraform state so it's safer to use the e-mail as the Id.
 	d.SetId(email)
 
 	return resourceUserRead(d, m)
@@ -130,7 +135,8 @@ func resourceUserRead(d *schema.ResourceData, m interface{}) error {
 	if len(airflowUsers) == 0 {
 		err := fetchAllUsers(airflowUsers, 0, m)
 		if err != nil {
-			return fmt.Errorf("failed get all users from Airflow: %w", err)
+			airflowUsersFetch.Unlock()
+			return fmt.Errorf("failed to get all users from Airflow: %w", err)
 		}
 	}
 
@@ -166,6 +172,7 @@ func resourceUserUpdate(d *schema.ResourceData, m interface{}) error {
 	roles := expandAirflowUserRoles(d.Get("roles").(*schema.Set))
 	username := d.Get("username").(string)
 
+	// Do use username and not the resource Id (=e-mail) when making API calls.
 	_, _, err := client.UserApi.PatchUser(pcfg.AuthContext, username).User(airflow.User{
 		Email:     &email,
 		FirstName: &firstName,
@@ -184,8 +191,10 @@ func resourceUserUpdate(d *schema.ResourceData, m interface{}) error {
 func resourceUserDelete(d *schema.ResourceData, m interface{}) error {
 	pcfg := m.(ProviderConfig)
 	client := pcfg.ApiClient
+	username := d.Get("username").(string)
 
-	resp, err := client.UserApi.DeleteUser(pcfg.AuthContext, d.Id()).Execute()
+	// Do use username and not the resource Id (=e-mail) when making API calls.
+	resp, err := client.UserApi.DeleteUser(pcfg.AuthContext, username).Execute()
 	if err != nil {
 		return fmt.Errorf("failed to delete user `%s` from Airflow: %w", d.Id(), err)
 	}
